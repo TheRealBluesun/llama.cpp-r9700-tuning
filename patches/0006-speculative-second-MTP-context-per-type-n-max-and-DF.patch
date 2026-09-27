@@ -1,0 +1,771 @@
+From b22fb9f0ae47ea3eb1e80791767911eb7c2dd68d Mon Sep 17 00:00:00 2001
+From: TheRealBluesun <c.r.novick@gmail.com>
+Date: Sun, 27 Sep 2026 13:15:18 -0400
+Subject: [PATCH 06/10] speculative: second MTP context, per-type n-max, and
+ DFlash gating
+
+PR-group: spec-multi-drafter
+Depends-on: spec-draft-ctx-size
+---
+ common/arg.cpp                                |  41 +++
+ common/common.cpp                             |  12 +-
+ common/common.h                               |  39 ++-
+ common/speculative.cpp                        | 233 +++++++++++++++---
+ common/speculative.h                          |   7 +
+ .../speculative-simple/speculative-simple.cpp |  14 ++
+ tools/server/server-context.cpp               |  19 +-
+ 7 files changed, 318 insertions(+), 47 deletions(-)
+
+diff --git a/common/arg.cpp b/common/arg.cpp
+index 63e34277..b4b37aa5 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -4142,6 +4142,47 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.speculative.draft.n_max = value;
+         }
+     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MAX"));
++    add_opt(common_arg(
++        {"--spec-mtp-n-max"}, "N",
++        "number of tokens for the MTP drafter to draft (default: --spec-draft-n-max)",
++        [](common_params & params, int value) {
++            if (value < 0) {
++                throw std::invalid_argument("invalid value");
++            }
++            params.speculative.n_max_mtp = value;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_MTP_N_MAX"));
++    add_opt(common_arg(
++        {"--spec-dflash-ctx-max"}, "N",
++        string_format("DFlash stops drafting when the sequence position exceeds this (default: %d)", params.speculative.dflash_ctx_max),
++        [](common_params & params, int value) {
++            if (value < 0) {
++                throw std::invalid_argument("invalid value");
++            }
++            params.speculative.dflash_ctx_max = value;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DFLASH_CTX_MAX"));
++    add_opt(common_arg(
++        {"--spec-dflash-min-acc"}, "A",
++        string_format("DFlash declines while its acceptance EMA is below this (default: %.1f)", (double) params.speculative.dflash_min_acc),
++        [](common_params & params, const std::string & value) {
++            const float acc = std::stof(value);
++            if (acc < 0.0f) {
++                throw std::invalid_argument("invalid value");
++            }
++            params.speculative.dflash_min_acc = acc;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DFLASH_MIN_ACC"));
++    add_opt(common_arg(
++        {"--spec-dflash-probe"}, "N",
++        string_format("DFlash still drafts every N steps while below min-acc (default: %d)", params.speculative.dflash_probe),
++        [](common_params & params, int value) {
++            if (value < 1) {
++                throw std::invalid_argument("invalid value");
++            }
++            params.speculative.dflash_probe = value;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DFLASH_PROBE"));
+     add_opt(common_arg(
+         {"--spec-draft-n-min"}, "N",
+         string_format("minimum number of draft tokens to use for speculative decoding (default: %d)", params.speculative.draft.n_min),
+diff --git a/common/common.cpp b/common/common.cpp
+index ae44f054..2d9c1e1e 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -1591,9 +1591,10 @@ static void common_context_seq_add(llama_context * ctx, llama_seq_id seq_id, lla
+     llama_memory_seq_add(mem, seq_id, p0, p1, delta);
+ }
+ 
+-void common_memory::init(llama_context * ctx_tgt, llama_context * ctx_dft) {
++void common_memory::init(llama_context * ctx_tgt, llama_context * ctx_dft, llama_context * ctx_mtp) {
+     this->ctx_tgt = ctx_tgt;
+     this->ctx_dft = ctx_dft;
++    this->ctx_mtp = ctx_mtp;
+ }
+ 
+ void common_memory::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+@@ -1601,6 +1602,9 @@ void common_memory::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) cons
+     if (ctx_dft) {
+         common_context_seq_rm(ctx_dft, seq_id, p0, p1);
+     }
++    if (ctx_mtp) {
++        common_context_seq_rm(ctx_mtp, seq_id, p0, p1);
++    }
+ }
+ 
+ void common_memory::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) const {
+@@ -1608,6 +1612,9 @@ void common_memory::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, lla
+     if (ctx_dft) {
+         common_context_seq_cp(ctx_dft, seq_id_src, seq_id_dst, p0, p1);
+     }
++    if (ctx_mtp) {
++        common_context_seq_cp(ctx_mtp, seq_id_src, seq_id_dst, p0, p1);
++    }
+ }
+ 
+ void common_memory::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) const {
+@@ -1615,6 +1622,9 @@ void common_memory::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, lla
+     if (ctx_dft) {
+         common_context_seq_add(ctx_dft, seq_id, p0, p1, delta);
+     }
++    if (ctx_mtp) {
++        common_context_seq_add(ctx_mtp, seq_id, p0, p1, delta);
++    }
+ }
+ 
+ void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
+diff --git a/common/common.h b/common/common.h
+index 9194d3dc..6b40928c 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -336,6 +336,8 @@ struct common_params_speculative_draft {
+ 
+     llama_context * ctx_tgt = nullptr;
+     llama_context * ctx_dft = nullptr;
++    // set when a draft-model impl and MTP are both active; MTP uses this, the draft model keeps ctx_dft
++    llama_context * ctx_mtp = nullptr;
+ 
+     int32_t n_gpu_layers = -1; // number of layers to store in VRAM for the draft model (-1 - use default)
+ 
+@@ -374,6 +376,15 @@ struct common_params_speculative {
+     double synth_len = -1.0;
+     std::vector<double> synth_rates;
+ 
++    // MTP draft length; <0 means use draft.n_max
++    int32_t n_max_mtp = -1;
++
++    // DFlash declines past this position, or while its acceptance EMA is below min_acc.
++    // probe: still draft every N steps while the EMA is low, so it can recover.
++    int32_t dflash_ctx_max = 4096;
++    float   dflash_min_acc = 3.5f;
++    int32_t dflash_probe   = 16;
++
+     // used by Simple, MTP, Eagle3, etc. - all methods that require some kind of draft model
+     common_params_speculative_draft draft;
+ 
+@@ -392,12 +403,27 @@ struct common_params_speculative {
+         return synth_len != -1.0 || !synth_rates.empty();
+     }
+ 
+-    uint32_t need_n_rs_seq() const {
+-        bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
+-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
+-        });
++    int32_t mtp_n_max() const {
++        return n_max_mtp >= 0 ? n_max_mtp : draft.n_max;
++    }
+ 
+-        return needs_rs_seq ? draft.n_max : 0u;
++    uint32_t need_n_rs_seq() const {
++        int32_t n = 0;
++        for (auto t : types) {
++            switch (t) {
++                case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
++                    n = std::max(n, mtp_n_max());
++                    break;
++                case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
++                case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
++                case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
++                    n = std::max(n, draft.n_max);
++                    break;
++                default:
++                    break;
++            }
++        }
++        return (uint32_t) std::max(0, n);
+     }
+ };
+ 
+@@ -1012,8 +1038,9 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx);
+ struct common_memory {
+     llama_context * ctx_tgt = nullptr;
+     llama_context * ctx_dft = nullptr;
++    llama_context * ctx_mtp = nullptr;
+ 
+-    void init(llama_context * ctx_tgt, llama_context * ctx_dft = nullptr);
++    void init(llama_context * ctx_tgt, llama_context * ctx_dft = nullptr, llama_context * ctx_mtp = nullptr);
+ 
+     // aborts execution on failure
+     void seq_rm (llama_seq_id seq_id, llama_pos p0, llama_pos p1) const;
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+index 07425c91..8edc365d 100644
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -151,6 +151,7 @@ struct common_speculative_impl {
+     size_t n_acc_tokens = 0; // number of tokens accepted by the target model.
+ 
+     std::vector<size_t> n_acc_tokens_per_pos; // number of tokens accepted per draft position.
++    std::vector<size_t> n_draft_req;          // drafts produced for this seq since begin()
+ 
+     // TODO: track performance of most recent calls
+     const bool gen_perf = true; // whether to generate performance stats.
+@@ -159,7 +160,7 @@ struct common_speculative_impl {
+     int64_t t_draft_us  = 0; // total time spent in generating drafts in this implementation in microseconds.
+     int64_t t_accept_us = 0; // total time spent in accumulation of this implementation in microseconds.
+ 
+-    common_speculative_impl(common_speculative_type type, uint32_t n_seq, int32_t n_max) : type(type), n_seq(n_seq), n_max(n_max) {}
++    common_speculative_impl(common_speculative_type type, uint32_t n_seq, int32_t n_max) : type(type), n_seq(n_seq), n_max(n_max), n_draft_req(n_seq, 0) {}
+ 
+     virtual ~common_speculative_impl() = default;
+ 
+@@ -939,11 +940,21 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+     const int32_t * target_layer_ids   = nullptr; // model_dft's extract layer indices
+     uint32_t        target_layer_ids_n = 0;
+ 
++    // DFlash gate. EMA of accepted draft tokens, reset to n_max at each begin().
++    int32_t ctx_max = 4096;
++    float   min_acc = 3.5f;
++    int32_t probe   = 16;
++    std::vector<float>   acc_ema;
++    std::vector<int32_t> step_i;
++
+     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
+             common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
+         : common_speculative_impl(type, n_seq, params.draft.n_max)
+         , params(params.draft)
+         , is_dspark(type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
++        , ctx_max(params.dflash_ctx_max)
++        , min_acc(params.dflash_min_acc)
++        , probe(params.dflash_probe)
+     {
+         auto * ctx_tgt = this->params.ctx_tgt;
+         auto * ctx_dft = this->params.ctx_dft;
+@@ -1005,6 +1016,13 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+         }
+         this->n_max = this->params.n_max;
+ 
++        if (!is_dspark) {
++            acc_ema.assign(n_seq, (float) this->n_max);
++            step_i.assign(n_seq, 0);
++            LOG_INF("%s: - dflash gate: ctx_max=%d, min_acc=%.2f, probe=%d\n",
++                    __func__, ctx_max, min_acc, probe);
++        }
++
+         batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
+         batch_inject = llama_batch_init(llama_n_ubatch(ctx_dft), n_embd_enc, n_seq);
+ 
+@@ -1072,6 +1090,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+             return;
+         }
+ 
++        if (!is_dspark) {
++            // optimistic: DFlash gets the first steps of the request
++            acc_ema[seq_id] = (float) n_max;
++            step_i[seq_id]  = 0;
++        }
++
+         const int32_t N = (int32_t) prompt.size();
+         if (N <= 0) {
+             return;
+@@ -1177,6 +1201,23 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+         return true;
+     }
+ 
++    // Leave the draft empty so the next impl drafts. Probe steps keep the EMA alive.
++    bool dflash_decline(llama_seq_id seq_id, llama_pos pos) {
++        if (is_dspark) {
++            return false;
++        }
++
++        const int32_t step = step_i[seq_id]++;
++        if (pos > ctx_max) {
++            return true;
++        }
++        if (acc_ema[seq_id] >= min_acc) {
++            return false;
++        }
++        // low EMA: still draft every probe steps
++        return probe <= 0 || (step % probe) != 0;
++    }
++
+     void draft(common_speculative_draft_params_vec & dparams) override {
+         auto & ctx_dft = params.ctx_dft;
+ 
+@@ -1193,6 +1234,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+                 continue;
+             }
+ 
++            if (dflash_decline(seq_id, dp.pos0)) {
++                continue;
++            }
++
+             common_sampler_reset(smpls[seq_id].get());
+ 
+             const int32_t n = (int32_t) dp.pos0;
+@@ -1320,8 +1365,17 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
+         }
+     }
+ 
+-    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
+-        // noop
++    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
++        if (is_dspark || is_other) {
++            return;
++        }
++        if (seq_id < 0 || seq_id >= (llama_seq_id) acc_ema.size()) {
++            return;
++        }
++
++        // alpha 0.3: a few low drafts pull the EMA under min_acc
++        constexpr float alpha = 0.3f;
++        acc_ema[seq_id] = alpha * (float) n_accepted + (1.0f - alpha) * acc_ema[seq_id];
+     }
+ };
+ 
+@@ -1361,10 +1415,16 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+     std::vector<int>                i_last;
+     std::vector<std::vector<float>> chain_h;
+ 
+-    common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
+-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
+-        , params(params.draft)
++    common_speculative_impl_draft_mtp(const common_params_speculative & spec, uint32_t n_seq)
++        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, spec.draft.n_max)
++        , params(spec.draft)
+     {
++        if (spec.n_max_mtp >= 0) {
++            this->params.n_max = spec.n_max_mtp;
++        }
++        if (this->params.ctx_mtp != nullptr) {
++            this->params.ctx_dft = this->params.ctx_mtp;
++        }
+         auto * ctx_tgt = this->params.ctx_tgt;
+         auto * ctx_dft = this->params.ctx_dft;
+         GGML_ASSERT(ctx_tgt && ctx_dft && "MTP requires ctx_tgt and ctx_dft to be set");
+@@ -1430,6 +1490,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+             }
+         }
+         this->n_max = this->params.n_max;
++        LOG_INF("%s: spec-mtp n_max=%d\n", __func__, this->n_max);
+ 
+         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
+ 
+@@ -2322,22 +2383,16 @@ std::vector<common_speculative_type> common_speculative_types_from_gguf(const st
+     return { type };
+ }
+ 
+-static uint32_t common_get_enabled_speculative_configs(const std::vector<common_speculative_type> & configs) {
+-    uint32_t result = 0;
+-    for (size_t i = 0; i < configs.size(); i++) {
+-        result |= (1u << configs[i]);
+-    }
+-    return result;
+-}
+-
+ int32_t common_speculative_n_max(const common_params_speculative * spec) {
+     int32_t n_max = 0;
+ 
+     for (const auto type : spec->types) {
+         switch (type) {
++            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
++                n_max = std::max(n_max, std::max(0, spec->mtp_n_max()));
++                break;
+             case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:
+             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
+-            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
+             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
+             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
+                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
+@@ -2523,10 +2578,37 @@ struct common_speculative_init_result::impl {
+     ~impl() = default;
+ 
+     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
++    // context_mtp references the target model, not model
+     llama_model_ptr   model;
+     llama_context_ptr context;
++    llama_context_ptr context_mtp;
+ };
+ 
++static bool common_speculative_type_uses_draft_model(common_speculative_type type) {
++    return type == COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE
++        || type == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3
++        || type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH
++        || type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
++}
++
++bool common_speculative_needs_mtp_ctx(const common_params_speculative & spec) {
++    if (!spec.has_dft()) {
++        return false;
++    }
++
++    bool spec_mtp = false;
++    bool model_draft = false;
++    for (auto type : spec.types) {
++        if (type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP) {
++            spec_mtp = true;
++        }
++        if (common_speculative_type_uses_draft_model(type)) {
++            model_draft = true;
++        }
++    }
++    return spec_mtp && model_draft;
++}
++
+ common_speculative_init_result::common_speculative_init_result(
+     common_params & params,
+       llama_model * model_tgt,
+@@ -2536,6 +2618,7 @@ common_speculative_init_result::common_speculative_init_result(
+     const bool spec_mtp = std::find(params.speculative.types.begin(),
+                                     params.speculative.types.end(),
+                                     COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
++    const bool split = common_speculative_needs_mtp_ctx(params.speculative);
+     const bool has_block_draft = std::any_of(
+         params.speculative.types.begin(), params.speculative.types.end(),
+         [](common_speculative_type t) {
+@@ -2545,7 +2628,8 @@ common_speculative_init_result::common_speculative_init_result(
+     auto mparams = common_model_params_to_llama(params);
+     auto cparams = common_context_params_to_llama(params);
+ 
+-    if (spec_mtp) {
++    // a combined draft-model + MTP run keeps the draft context at the default type
++    if (spec_mtp && !split) {
+         cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+     }
+ 
+@@ -2559,6 +2643,11 @@ common_speculative_init_result::common_speculative_init_result(
+ 
+     std::string model_path;
+     if (has_draft) {
++        // MTP weights live on the target; do not ask the draft file for them
++        if (split) {
++            mparams.load_mtp = false;
++        }
++
+         model_path = params.speculative.draft.mparams.path;
+         LOG_INF("%s: loading draft model '%s'\n", __func__, model_path.c_str());
+ 
+@@ -2583,7 +2672,7 @@ common_speculative_init_result::common_speculative_init_result(
+ 
+         llama_context * ctx_dft = llama_init_from_model(model_dft, cparams_dft);
+         if (ctx_dft == nullptr) {
+-            LOG_ERR("%s: failed to create MTP context\n", __func__);
++            LOG_ERR("%s: failed to create %s context\n", __func__, (spec_mtp && !split) ? "MTP" : "draft");
+             return;
+         }
+ 
+@@ -2601,6 +2690,31 @@ common_speculative_init_result::common_speculative_init_result(
+ 
+         pimpl->context.reset(ctx_dft);
+     }
++
++    if (split) {
++        auto cparams_mtp = cparams;
++        cparams_mtp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
++        cparams_mtp.n_outputs_max = (uint32_t) std::max(params.n_parallel, 1);
++        cparams_mtp.n_outputs_max_per_seq = 1;
++        // n_batch stays at the target prefill size so process() can submit it; the graph is one verify block
++        // verify can be a DFlash draft, so the ubatch covers the longer of the two lengths
++        const int32_t n_verify = std::max(params.speculative.draft.n_max, params.speculative.mtp_n_max());
++        const uint32_t n_draft_batch = (uint32_t) std::max(params.n_parallel, 1) *
++                                        (uint32_t) std::max(1, n_verify + 1);
++        cparams_mtp.n_ubatch = std::min(cparams_mtp.n_batch, n_draft_batch);
++        LOG_INF("%s: MTP context n_batch = %u, n_ubatch = %u\n",
++                __func__, cparams_mtp.n_batch, cparams_mtp.n_ubatch);
++
++        LOG_INF("%s: creating MTP context against the target model\n", __func__);
++
++        llama_context * ctx_mtp = llama_init_from_model(model_tgt, cparams_mtp);
++        if (ctx_mtp == nullptr) {
++            LOG_ERR("%s: failed to create MTP context\n", __func__);
++            return;
++        }
++
++        pimpl->context_mtp.reset(ctx_mtp);
++    }
+ }
+ 
+ common_speculative_init_result::~common_speculative_init_result() = default;
+@@ -2613,6 +2727,10 @@ llama_context * common_speculative_init_result::context() {
+     return pimpl->context.get();
+ }
+ 
++llama_context * common_speculative_init_result::context_mtp() {
++    return pimpl->context_mtp.get();
++}
++
+ common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt) {
+     return std::make_unique<common_speculative_init_result>(params, model_tgt, ctx_tgt);
+ }
+@@ -2631,33 +2749,37 @@ common_speculative_output_limits common_speculative_get_output_limits(
+ // initialization of the speculative decoding system
+ //
+ common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq) {
+-    // Compute the implementations to use based on the config and their order of preference
+-    std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
++    // impl order follows --spec-type; the first non-empty draft wins
++    std::vector<common_speculative_config> configs = {};
+     {
+-        uint32_t enabled_configs = common_get_enabled_speculative_configs(params.types);
++        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
+ 
+-        auto add_config_if_enabled = [&](common_speculative_type type, bool available = true) {
+-            if (available && (enabled_configs & (1u << type))) {
+-                configs.emplace_back(type, params);
++        auto type_available = [&](common_speculative_type type) {
++            switch (type) {
++                case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
++                case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
++                case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
++                    return params.draft.ctx_dft != nullptr;
++                case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
++                    return params.draft.ctx_mtp != nullptr || params.draft.ctx_dft != nullptr;
++                case COMMON_SPECULATIVE_TYPE_NONE:
++                case COMMON_SPECULATIVE_TYPE_COUNT:
++                    return false;
++                default:
++                    return true;
+             }
+         };
+ 
+-        // when adding a new type - update here the logic above
+-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
+-
+-        // this list here defines the priority of the speculators
+-        // the one with highest priority are listed first
+-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
+-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
+-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
+-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
+-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
+-
+-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE);
+-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params.draft.ctx_dft != nullptr);
+-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP,    params.draft.ctx_dft != nullptr);
+-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params.draft.ctx_dft != nullptr);
+-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params.draft.ctx_dft != nullptr);
++        bool seen[COMMON_SPECULATIVE_TYPE_COUNT] = {};
++        for (auto type : params.types) {
++            if ((int) type < 0 || type >= COMMON_SPECULATIVE_TYPE_COUNT || seen[type]) {
++                continue;
++            }
++            seen[type] = true;
++            if (type_available(type)) {
++                configs.emplace_back(type, params);
++            }
++        }
+     }
+ 
+     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
+@@ -2740,6 +2862,15 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+         return nullptr;
+     }
+ 
++    if (impls.size() > 1) {
++        std::vector<std::string> names;
++        names.reserve(impls.size());
++        for (const auto & impl : impls) {
++            names.push_back(common_speculative_type_to_str(impl->type));
++        }
++        SPC_INF("impl order: %s\n", string_join(names, ", ").c_str());
++    }
++
+     common_speculative_ptr result(new common_speculative {
+         /* .dparams     = */ common_speculative_draft_params_vec(n_seq),
+         /* .impls       = */ std::move(impls),
+@@ -2798,6 +2929,9 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
+     }
+ 
+     for (auto & impl : spec->impls) {
++        if (seq_id >= 0 && (uint32_t) seq_id < impl->n_seq) {
++            impl->n_draft_req[seq_id] = 0;
++        }
+         common_time_meas tm(impl->t_begin_us, !impl->gen_perf);
+         impl->begin(seq_id, prompt);
+         impl->n_call_begin++;
+@@ -2880,6 +3014,7 @@ void common_speculative_draft(common_speculative * spec) {
+ 
+                     impl->n_gen_drafts++;
+                     impl->n_gen_tokens += result.size();
++                    impl->n_draft_req[seq_id]++;
+                 }
+             }
+ 
+@@ -2964,6 +3099,26 @@ void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id
+     }
+ }
+ 
++void common_speculative_print_drafts(const common_speculative * spec, llama_seq_id seq_id) {
++    if (spec == nullptr || seq_id < 0) {
++        return;
++    }
++
++    std::string parts;
++    for (const auto & impl : spec->impls) {
++        if ((uint32_t) seq_id >= impl->n_seq) {
++            continue;
++        }
++        if (!parts.empty()) {
++            parts += ", ";
++        }
++        parts += string_format("%s=%zu", common_speculative_type_to_str(impl->type).c_str(), impl->n_draft_req[seq_id]);
++    }
++    if (!parts.empty()) {
++        LOG_INF("spec drafts: seq %d: %s\n", (int) seq_id, parts.c_str());
++    }
++}
++
+ void common_speculative_print_stats(const common_speculative * spec) {
+     if (spec == nullptr) {
+         return;
+diff --git a/common/speculative.h b/common/speculative.h
+index c968750e..79378035 100644
+--- a/common/speculative.h
++++ b/common/speculative.h
+@@ -92,6 +92,9 @@ void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id
+ // print statistics about the speculative decoding
+ void common_speculative_print_stats(const common_speculative * spec);
+ 
++// one line: how many steps each impl drafted since begin() for this seq
++void common_speculative_print_drafts(const common_speculative * spec, llama_seq_id seq_id);
++
+ struct common_speculative_deleter {
+     void operator()(common_speculative * s) { common_speculative_free(s); }
+ };
+@@ -104,6 +107,7 @@ struct common_speculative_init_result {
+ 
+     llama_model   * model();
+     llama_context * context();
++    llama_context * context_mtp();
+ 
+ private:
+     struct impl;
+@@ -113,3 +117,6 @@ private:
+ using common_speculative_init_result_ptr = std::unique_ptr<common_speculative_init_result>;
+ 
+ common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);
++
++// true when a draft-model type and MTP are both enabled, so each needs its own context
++bool common_speculative_needs_mtp_ctx(const common_params_speculative & spec);
+diff --git a/examples/speculative-simple/speculative-simple.cpp b/examples/speculative-simple/speculative-simple.cpp
+index 863af5a2..f0be874a 100644
+--- a/examples/speculative-simple/speculative-simple.cpp
++++ b/examples/speculative-simple/speculative-simple.cpp
+@@ -61,9 +61,11 @@ int main(int argc, char ** argv) {
+ 
+         params.speculative.draft.ctx_tgt = ctx_tgt;
+         params.speculative.draft.ctx_dft = spec_init->context();
++        params.speculative.draft.ctx_mtp = spec_init->context_mtp();
+     }
+ 
+     llama_context * ctx_dft = params.speculative.draft.ctx_dft;
++    llama_context * ctx_mtp = params.speculative.draft.ctx_mtp;
+ 
+     // check if the context supports partial sequence removal
+     const bool use_ckpt_tgt = common_context_can_seq_rm(ctx_tgt) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+@@ -211,6 +213,10 @@ int main(int argc, char ** argv) {
+ 
+                 llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, ckpt.pos_max + 1, -1);
+             }
++
++            if (ctx_mtp) {
++                llama_memory_seq_rm(llama_get_memory(ctx_mtp), seq_id, ckpt.pos_max + 1, -1);
++            }
+         } else {
+             // we have a previous (partial) draft to reuse from checkpoint restoration
+             if (use_ckpt_tgt) {
+@@ -281,6 +287,10 @@ int main(int argc, char ** argv) {
+                 llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, ckpt.pos_max + 1, -1);
+             }
+ 
++            if (ctx_mtp) {
++                llama_memory_seq_rm(llama_get_memory(ctx_mtp), seq_id, ckpt.pos_max + 1, -1);
++            }
++
+             prompt_tgt.resize(ckpt.n_tokens);
+             smpl = std::move(smpl_save);
+ 
+@@ -334,6 +344,10 @@ int main(int argc, char ** argv) {
+             if (ctx_dft) {
+                 llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, n_past, -1);
+             }
++
++            if (ctx_mtp) {
++                llama_memory_seq_rm(llama_get_memory(ctx_mtp), seq_id, n_past, -1);
++            }
+         }
+ 
+         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index e95fb63a..699849e1 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -681,6 +681,7 @@ struct server_slot {
+         }
+ 
+         common_speculative_print_stats(spec);
++        common_speculative_print_drafts(spec, id);
+     }
+ 
+     json to_json(bool only_metrics = false) const {
+@@ -887,6 +888,7 @@ private:
+ 
+     llama_model   * model_dft = nullptr;
+     llama_context * ctx_dft   = nullptr;
++    llama_context * ctx_mtp   = nullptr;
+ 
+     common_speculative_init_result_ptr spec_init;
+ 
+@@ -940,6 +942,7 @@ private:
+         spec_init.reset();
+ 
+         ctx_dft   = nullptr;
++        ctx_mtp   = nullptr;
+         model_dft = nullptr;
+ 
+         llama_init.reset();
+@@ -1132,6 +1135,7 @@ private:
+                 spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
+                 model_dft = spec_init->model();
+                 ctx_dft   = spec_init->context();
++                ctx_mtp   = spec_init->context_mtp();
+ 
+                 if (has_draft && model_dft == nullptr) {
+                     SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
+@@ -1143,8 +1147,14 @@ private:
+                     return false;
+                 }
+ 
++                if (common_speculative_needs_mtp_ctx(params_base.speculative) && ctx_mtp == nullptr) {
++                    SRV_ERR("%s", "failed to create MTP context\n");
++                    return false;
++                }
++
+                 params_base.speculative.draft.ctx_tgt = ctx_tgt;
+                 params_base.speculative.draft.ctx_dft = ctx_dft;
++                params_base.speculative.draft.ctx_mtp = ctx_mtp;
+             }
+ 
+             load_progress_callback(1.0f, &load_progress_spec);
+@@ -1276,6 +1286,7 @@ private:
+         } else {
+             spec_init.reset();
+             ctx_dft   = nullptr;
++            ctx_mtp   = nullptr;
+             model_dft = nullptr;
+         }
+ 
+@@ -1290,7 +1301,7 @@ private:
+             slot.id      = i;
+             slot.ctx_tgt = ctx_tgt;
+             slot.ctx_dft = ctx_dft;
+-            slot.mem.init(ctx_tgt, ctx_dft);
++            slot.mem.init(ctx_tgt, ctx_dft, ctx_mtp);
+             slot.spec    = spec.get();
+             slot.n_ctx   = n_ctx_slot();
+ 
+@@ -3067,6 +3078,12 @@ private:
+                 }
+             }
+ 
++            if (ctx_mtp) {
++                if (!llama_memory_seq_rm(llama_get_memory(ctx_mtp), slot.id, ckpt.pos_max + 1, -1)) {
++                    GGML_ABORT("failed to remove sequence %d\n", slot.id);
++                }
++            }
++
+             if (!draft.empty()) {
+                 const bool use_ckpt_tgt =
+                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+-- 
+2.43.0
+

@@ -1,18 +1,17 @@
-From 97ccedf6642a3bb9be30941c3e60561a4812389e Mon Sep 17 00:00:00 2001
+From 6abed85bcd889337d8d6885f86e9ee886c4ea0b8 Mon Sep 17 00:00:00 2001
 From: TheRealBluesun <c.r.novick@gmail.com>
-Date: Sun, 27 Sep 2026 00:27:17 -0400
-Subject: [PATCH 2/6] vulkan: fuse GATED_DELTA_NET + snapshot CPY into the
- recurrent cache; add qwen35moe prefill FA perf shapes
+Date: Sun, 27 Sep 2026 13:13:46 -0400
+Subject: [PATCH 02/10] vulkan: fuse GATED_DELTA_NET with snapshot CPY
 
+PR-group: vk-gdn-snapshot-fusion
 ---
  .../ggml-vulkan/ggml-vulkan-push-constants.h  |  5 ++
  ggml/src/ggml-vulkan/ggml-vulkan.cpp          | 78 +++++++++++++++++--
  .../vulkan-shaders/gated_delta_net.comp       | 19 ++++-
- tests/test-backend-ops.cpp                    |  3 +
- 4 files changed, 96 insertions(+), 9 deletions(-)
+ 3 files changed, 93 insertions(+), 9 deletions(-)
 
 diff --git a/ggml/src/ggml-vulkan/ggml-vulkan-push-constants.h b/ggml/src/ggml-vulkan/ggml-vulkan-push-constants.h
-index f066d1064..41e834b7a 100644
+index f066d106..41e834b7 100644
 --- a/ggml/src/ggml-vulkan/ggml-vulkan-push-constants.h
 +++ b/ggml/src/ggml-vulkan/ggml-vulkan-push-constants.h
 @@ -699,6 +699,11 @@ struct vk_op_gated_delta_net_push_constants {
@@ -28,7 +27,7 @@ index f066d1064..41e834b7a 100644
  
  struct vk_op_ssm_scan_push_constants {
 diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
-index ce40baec2..7836da325 100644
+index ce40baec..7836da32 100644
 --- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
 +++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
 @@ -3715,7 +3715,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
@@ -161,7 +160,7 @@ index ce40baec2..7836da325 100644
                  ctx->num_additional_fused_ops = 2;
                  fusion_string = "SSM_CONV_BIAS_SILU";
 diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/gated_delta_net.comp b/ggml/src/ggml-vulkan/vulkan-shaders/gated_delta_net.comp
-index 0e384330b..8f8591940 100644
+index 0e384330..8f859194 100644
 --- a/ggml/src/ggml-vulkan/vulkan-shaders/gated_delta_net.comp
 +++ b/ggml/src/ggml-vulkan/vulkan-shaders/gated_delta_net.comp
 @@ -32,6 +32,10 @@ layout(push_constant) uniform Parameters {
@@ -204,20 +203,6 @@ index 0e384330b..8f8591940 100644
                  }
              }
          }
-diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 0ef71c67d..88170a5ea 100644
---- a/tests/test-backend-ops.cpp
-+++ b/tests/test-backend-ops.cpp
-@@ -11538,6 +11538,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
-     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 65536, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 131072, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 131072, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {8, 1}, 8192, 2048, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16)); // qwen35moe prefill
-+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {8, 1}, 32768, 2048, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16)); // qwen35moe prefill
-+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {8, 1}, 112640, 2048, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16)); // qwen35moe prefill
- 
-     for (int kv : { 4096, 8192, 16384,32768, 65536, }) {
-         for (int hs : { 64, 128, 256, 576, }) {
 -- 
-2.55.0
+2.43.0
 

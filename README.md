@@ -5,6 +5,7 @@ Mesa 26.2 RADV, ROCm 7.1 (Fedora packages). Workload: chat + agent use with long
 
 - **Phase 1:** Qwen3.8-35B-A3B Q4_K_M (hybrid Gated-DeltaNet + attention MoE, ~3B active), MTP speculative decoding.
   **+23–27% decode.**
+- See PR-MAP.md for how the patches map to upstream PRs.
 - **Phase 2:** Qwen3.8-27B (dense hybrid). Unsloth UD-Q4_K_XL + MTP (n=3) + draft head + RDNA4 mat-vec tuning:
   **2.4–2.7× decode on code/JSON, 1.6–2.0× on prose/explanations, 1.9× at 100K context** vs stock llama.cpp without speculation.
 

@@ -1,0 +1,30 @@
+From fc314e159a2121256cff155caf6cec0b3f53870b Mon Sep 17 00:00:00 2001
+From: TheRealBluesun <c.r.novick@gmail.com>
+Date: Sun, 27 Sep 2026 13:14:06 -0400
+Subject: [PATCH 04/10] vulkan: magic bias on the RDNA4 symmetric cm1 epilogue
+
+PR-group: vk-rdna4-cm1-symbias
+---
+ ggml/src/ggml-vulkan/vulkan-shaders/mul_mmq_cm1.comp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/mul_mmq_cm1.comp b/ggml/src/ggml-vulkan/vulkan-shaders/mul_mmq_cm1.comp
+index 7cab9a11..3fb5ea54 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/mul_mmq_cm1.comp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/mul_mmq_cm1.comp
+@@ -124,7 +124,12 @@ shared int8_t cm1_kvalues[16];
+ const uint CM_ELEMS = (TM * TN) / WARP;
+ #define ACC_BIAS_BITS 0x4B400000
+ #define ACC_BIAS_F    12582912.0f
++#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K) || KSCALES == 2
+ const bool USE_MAGIC_BIAS = WARP != 32;
++#else
++// RDNA4 WARP==32: magic bias on the symmetric epilogue only.
++const bool USE_MAGIC_BIAS = WARP != 32 || DEVICE_ARCH == VK_ARCH_AMD_RDNA4;
++#endif
+ 
+ // Accumulator row for element e: RDNA4 blocked, RDNA3/3.5 interleaved.
+ uint cm_elem_row(uint e) {
+-- 
+2.43.0
+

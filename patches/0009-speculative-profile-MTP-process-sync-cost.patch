@@ -1,0 +1,262 @@
+From 95367efcab28e96c528f2e5662ea863bf703804f Mon Sep 17 00:00:00 2001
+From: TheRealBluesun <c.r.novick@gmail.com>
+Date: Sun, 27 Sep 2026 13:15:46 -0400
+Subject: [PATCH 09/10] speculative: profile MTP process sync cost
+
+PR-group: local
+---
+ common/speculative.cpp | 133 +++++++++++++++++++++++++++++++++--------
+ 1 file changed, 109 insertions(+), 24 deletions(-)
+
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+index 8edc365d..c362516f 100644
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -30,6 +30,9 @@
+ #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
+ #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
+ 
++// gen steps verify at most a few draft tokens; bigger batches are prompt ubatches
++static const int32_t SPEC_STEP_NTOK_MAX = 16;
++
+ const std::map<std::string, common_speculative_type> common_speculative_type_from_name_map = {
+     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
+     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
+@@ -142,6 +145,8 @@ struct common_speculative_impl {
+     int32_t n_max; // maximum draft length after implementation-specific limits
+ 
+     size_t n_call_begin  = 0; // number of times this implementation was called for refresh.
++    size_t n_call_process = 0; // number of times this implementation was called for process().
++    size_t n_call_process_step = 0; // process() calls with n_tokens <= SPEC_STEP_NTOK_MAX
+     size_t n_call_draft  = 0; // number of times this implementation was called for generation.
+     size_t n_call_accept = 0; // number of times this implementation was called for accumulation.
+ 
+@@ -157,6 +162,8 @@ struct common_speculative_impl {
+     const bool gen_perf = true; // whether to generate performance stats.
+ 
+     int64_t t_begin_us  = 0; // total time spent in refresh of this implementation in microseconds.
++    int64_t t_process_us = 0; // total time spent in process() in microseconds.
++    int64_t t_process_step_us = 0; // process() time for gen-sized batches only.
+     int64_t t_draft_us  = 0; // total time spent in generating drafts in this implementation in microseconds.
+     int64_t t_accept_us = 0; // total time spent in accumulation of this implementation in microseconds.
+ 
+@@ -175,6 +182,9 @@ struct common_speculative_impl {
+     // (optional) serialize/restore per-seq internal state (e.g. eagle3's deferred boundary).
+     virtual bool get_state(llama_seq_id /*seq_id*/, std::vector<uint8_t> & /*data*/) const { return false; }
+     virtual void set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) {}
++
++    // extra host split appended to the statistics line
++    virtual std::string perf_extra() const { return {}; }
+ };
+ 
+ struct common_speculative_impl_draft_simple : public common_speculative_impl {
+@@ -1412,6 +1422,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+     std::vector<std::vector<float>> verify_h;
+     std::vector<int32_t> verify_h_rows;
+ 
++    // host split for gen-sized process() calls
++    size_t  n_step = 0;
++    int64_t t_step_get_us = 0;
++    int64_t t_step_copy_us = 0;
++    int64_t t_step_decode_us = 0;
++    int64_t t_step_verify_us = 0;
++
+     std::vector<int>                i_last;
+     std::vector<std::vector<float>> chain_h;
+ 
+@@ -1574,6 +1591,22 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+ 
+         const size_t row_bytes = (size_t) n_embd * sizeof(float);
+ 
++        const bool is_step = n_tokens > 0 && n_tokens <= SPEC_STEP_NTOK_MAX;
++        int64_t dt_get = 0;
++        int64_t dt_copy = 0;
++        int64_t dt_decode = 0;
++        int64_t dt_verify = 0;
++        auto acc_step = [&]() {
++            if (!is_step) {
++                return;
++            }
++            n_step++;
++            t_step_get_us += dt_get;
++            t_step_copy_us += dt_copy;
++            t_step_decode_us += dt_decode;
++            t_step_verify_us += dt_verify;
++        };
++
+         // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
+         if (!is_mem_shared) {
+             common_batch_clear(batch);
+@@ -1588,8 +1621,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+             //                                                       ^--- this is a problem
+             // TODO:this is generally true, but would be nice to assert it
+             {
++                const int64_t t0 = ggml_time_us();
+                 const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
++                dt_get += ggml_time_us() - t0;
++
++                const int64_t t1 = ggml_time_us();
+                 std::memcpy(batch.embd + (size_t) 1 * n_embd, h_tgt, row_bytes * (n_tokens-1));
++                dt_copy += ggml_time_us() - t1;
+             }
+ 
+             // fill the pending embeddings from a previous run
+@@ -1597,17 +1635,22 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+                 std::memcpy(batch.embd + (size_t) idx * n_embd, h_row, row_bytes);
+             };
+ 
+-            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+-                if (i_batch_beg[seq_id] < 0) {
+-                    continue;
+-                }
++            {
++                const int64_t t2 = ggml_time_us();
++                for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
++                    if (i_batch_beg[seq_id] < 0) {
++                        continue;
++                    }
+ 
+-                set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
++                    set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
++                }
++                dt_copy += ggml_time_us() - t2;
+             }
+ 
+             auto * mem_dft = llama_get_memory(ctx_dft);
+ 
+             bool ok = true;
++            const int64_t t3 = ggml_time_us();
+             for (int head = 0; head < n_mtp_layers; ++head) {
+                 if (chain_heads) {
+                     // ref: https://github.com/ggml-org/llama.cpp/pull/24340/changes#r3413498544
+@@ -1628,36 +1671,58 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+                     break;
+                 }
+             }
++            dt_decode += ggml_time_us() - t3;
+ 
+             if (chain_heads) {
+                 llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
+             }
+             if (!ok) {
++                acc_step();
+                 return false;
+             }
+         }
+ 
+-        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+-            if (i_batch_end[seq_id] < 0) {
+-                continue;
+-            }
++        {
++            const int64_t t4 = ggml_time_us();
++            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
++                if (i_batch_end[seq_id] < 0) {
++                    continue;
++                }
+ 
+-            const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
+-            verify_h_rows[seq_id] = n_rows;
+-            verify_h[seq_id].resize((size_t) n_rows * n_embd);
++                const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
++                verify_h_rows[seq_id] = n_rows;
++                verify_h[seq_id].resize((size_t) n_rows * n_embd);
+ 
+-            for (int32_t i = 0; i < n_rows; ++i) {
+-                const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, i_batch_beg[seq_id] + i);
+-                std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
+-            }
++                for (int32_t i = 0; i < n_rows; ++i) {
++                    const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, i_batch_beg[seq_id] + i);
++                    std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
++                }
+ 
+-            std::memcpy(pending_h[seq_id].data(),
+-                    verify_h[seq_id].data() + (size_t) (n_rows - 1) * n_embd, row_bytes);
++                std::memcpy(pending_h[seq_id].data(),
++                        verify_h[seq_id].data() + (size_t) (n_rows - 1) * n_embd, row_bytes);
++            }
++            dt_verify += ggml_time_us() - t4;
+         }
+ 
++        acc_step();
+         return true;
+     }
+ 
++    std::string perf_extra() const override {
++        if (n_step == 0) {
++            return "";
++        }
++        const double n = (double) n_step;
++        std::ostringstream oss;
++        oss << std::fixed << std::setprecision(3);
++        oss << ", mtp-step n=" << n_step << " ms(get,copy,decode,verify) = "
++            << (double) t_step_get_us / 1000.0 / n << ", "
++            << (double) t_step_copy_us / 1000.0 / n << ", "
++            << (double) t_step_decode_us / 1000.0 / n << ", "
++            << (double) t_step_verify_us / 1000.0 / n;
++        return oss.str();
++    }
++
+     void draft(common_speculative_draft_params_vec & dparams) override {
+         auto & ctx_dft = params.ctx_dft;
+ 
+@@ -2946,7 +3011,17 @@ bool common_speculative_process(common_speculative * spec, const llama_batch & b
+     }
+ 
+     for (auto & impl : spec->impls) {
++        const int64_t t0 = impl->gen_perf ? ggml_time_us() : 0;
+         result = result && impl->process(batch);
++        if (impl->gen_perf) {
++            const int64_t dt = ggml_time_us() - t0;
++            impl->t_process_us += dt;
++            impl->n_call_process++;
++            if (batch.n_tokens > 0 && batch.n_tokens <= SPEC_STEP_NTOK_MAX) {
++                impl->t_process_step_us += dt;
++                impl->n_call_process_step++;
++            }
++        }
+     }
+ 
+     return result;
+@@ -3127,11 +3202,21 @@ void common_speculative_print_stats(const common_speculative * spec) {
+     for (const auto & impl : spec->impls) {
+         std::string str_perf;
+         if (impl->gen_perf) {
++            auto ms_per = [](int64_t us, size_t n) -> double {
++                return n == 0 ? 0.0 : (double) us / 1000.0 / (double) n;
++            };
+             std::ostringstream oss;
+-            oss << std::fixed << std::setprecision(3) << impl->t_begin_us / 1000.0 << ", ";
+-            oss << std::fixed << std::setprecision(3) << impl->t_draft_us / 1000.0 << ", ";
+-            oss << std::fixed << std::setprecision(3) << impl->t_accept_us / 1000.0;
+-            str_perf = ", dur(b,g,a) = " + oss.str() + " ms";
++            oss << std::fixed << std::setprecision(3);
++            oss << (double) impl->t_begin_us / 1000.0 << ", ";
++            oss << (double) impl->t_process_us / 1000.0 << ", ";
++            oss << (double) impl->t_draft_us / 1000.0 << ", ";
++            oss << (double) impl->t_accept_us / 1000.0;
++            oss << " ms, ms/step(p,g,a) = ";
++            oss << ms_per(impl->t_process_step_us, impl->n_call_process_step) << ", ";
++            oss << ms_per(impl->t_draft_us, impl->n_call_draft) << ", ";
++            oss << ms_per(impl->t_accept_us, impl->n_call_accept);
++            oss << " (n_step=" << impl->n_call_process_step << ")";
++            str_perf = ", dur(b,p,g,a) = " + oss.str() + impl->perf_extra();
+         } else {
+             str_perf = "";
+         }
+@@ -3153,9 +3238,9 @@ void common_speculative_print_stats(const common_speculative * spec) {
+             str_stats = ", #mean acc len = " + oss.str() + ", #acc rate/pos = (" + tmp.str() + ")";
+         }
+ 
+-        SPC_TRC("statistics %16s: #calls(b,g,a) = %4zu %6zu %6zu, #gen drafts = %6zu, #acc drafts = %5zu, #gen tokens = %6zu, #acc tokens = %5zu%s%s\n",
++        SPC_INF("statistics %16s: #calls(b,p,g,a) = %4zu %6zu %6zu %6zu, #gen drafts = %6zu, #acc drafts = %5zu, #gen tokens = %6zu, #acc tokens = %5zu%s%s\n",
+                 common_speculative_type_to_str(impl->type).c_str(),
+-                impl->n_call_begin, impl->n_call_draft, impl->n_call_accept,
++                impl->n_call_begin, impl->n_call_process, impl->n_call_draft, impl->n_call_accept,
+                 impl->n_gen_drafts,
+                 impl->n_acc_drafts,
+                 impl->n_gen_tokens,
+-- 
+2.43.0
+
