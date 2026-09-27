@@ -145,9 +145,10 @@ goes from 122 / 107 to 143 / 123 tok/s. Prefill is unchanged (179K cold prefill 
 
 ## Using it
 
-Base: llama.cpp `95887577a` (2026-09-26).
+The patches are maintained as branch **`r9700`** of the fork https://github.com/TheRealBluesun/llama.cpp
+(base: upstream `95887577a`, 2026-09-26). `patches/` here holds the same commits as files.
 ```
-git -C llama.cpp checkout 95887577a && git -C llama.cpp am ../patches/*.patch
+git clone -b r9700 https://github.com/TheRealBluesun/llama.cpp
 cmake -S llama.cpp -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_NATIVE=ON
 cmake --build build -j
 # 35B-A3B
