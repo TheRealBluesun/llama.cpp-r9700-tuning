@@ -1,0 +1,63 @@
+{
+ "label": "q27-final-q4kxl-mtp3",
+ "url": "http://127.0.0.1:8081",
+ "model": "q27-q4kxl-dv98k.gguf",
+ "time": "2026-09-27 03:58:01",
+ "runs": [
+  {
+   "target_k": 1,
+   "prompt_tokens": 1118,
+   "ttft": 1.4066905975341797,
+   "prefill_tps": 794.7732088063772,
+   "completion_tokens": 300,
+   "decode_tps": 76.33705966156808,
+   "accept": 0.7013888888888888,
+   "server_pp_tps": 939.0594118867449,
+   "server_tg_tps": 76.33496189762077
+  },
+  {
+   "target_k": 8,
+   "prompt_tokens": 7856,
+   "ttft": 7.914225101470947,
+   "prefill_tps": 992.6429813753812,
+   "completion_tokens": 300,
+   "decode_tps": 67.43494420673461,
+   "accept": 0.5981308411214953,
+   "server_pp_tps": 1021.6704415759526,
+   "server_tg_tps": 67.43582601556888
+  },
+  {
+   "target_k": 32,
+   "prompt_tokens": 30225,
+   "ttft": 32.797666788101196,
+   "prefill_tps": 921.559457118622,
+   "completion_tokens": 300,
+   "decode_tps": 68.26588258054058,
+   "accept": 0.6883561643835616,
+   "server_pp_tps": 938.5016117697821,
+   "server_tg_tps": 68.26602470727802
+  },
+  {
+   "target_k": 64,
+   "prompt_tokens": 57465,
+   "ttft": 69.78444623947144,
+   "prefill_tps": 823.4642975141455,
+   "completion_tokens": 300,
+   "decode_tps": 60.92235419210569,
+   "accept": 0.6622073578595318,
+   "server_pp_tps": 842.8537377494146,
+   "server_tg_tps": 60.920573020132316
+  },
+  {
+   "target_k": 115,
+   "prompt_tokens": 103563,
+   "ttft": 149.09844326972961,
+   "prefill_tps": 694.5947773086217,
+   "completion_tokens": 300,
+   "decode_tps": 48.54527162619591,
+   "accept": 0.5696969696969697,
+   "server_pp_tps": 707.9453475461163,
+   "server_tg_tps": 48.54505281263379
+  }
+ ]
+}

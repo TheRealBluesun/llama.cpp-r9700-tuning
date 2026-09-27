@@ -1,0 +1,63 @@
+{
+ "label": "q27-stock-nospec",
+ "url": "http://127.0.0.1:8081",
+ "model": "Qwen3.8-27B-UD-IQ4_XS.gguf",
+ "time": "2026-09-27 00:40:17",
+ "runs": [
+  {
+   "target_k": 1,
+   "prompt_tokens": 1118,
+   "ttft": 1.2274441719055176,
+   "prefill_tps": 910.835723195774,
+   "completion_tokens": 300,
+   "decode_tps": 35.701705971283815,
+   "accept": null,
+   "server_pp_tps": 1080.9744627034804,
+   "server_tg_tps": 35.70132628636117
+  },
+  {
+   "target_k": 8,
+   "prompt_tokens": 7856,
+   "ttft": 7.07845139503479,
+   "prefill_tps": 1109.8472761302883,
+   "completion_tokens": 300,
+   "decode_tps": 34.752476075018315,
+   "accept": null,
+   "server_pp_tps": 1143.7200075588014,
+   "server_tg_tps": 34.75186817442509
+  },
+  {
+   "target_k": 32,
+   "prompt_tokens": 30225,
+   "ttft": 29.54254150390625,
+   "prefill_tps": 1023.1008728887971,
+   "completion_tokens": 300,
+   "decode_tps": 32.135049024456315,
+   "accept": null,
+   "server_pp_tps": 1040.9473023398637,
+   "server_tg_tps": 32.13443931690565
+  },
+  {
+   "target_k": 64,
+   "prompt_tokens": 57465,
+   "ttft": 63.41617441177368,
+   "prefill_tps": 906.1568366907228,
+   "completion_tokens": 300,
+   "decode_tps": 29.45063512056931,
+   "accept": null,
+   "server_pp_tps": 923.8459469641207,
+   "server_tg_tps": 29.449986535741942
+  },
+  {
+   "target_k": 115,
+   "prompt_tokens": 103563,
+   "ttft": 135.245689868927,
+   "prefill_tps": 765.7397444633378,
+   "completion_tokens": 300,
+   "decode_tps": 25.81883908651276,
+   "accept": null,
+   "server_pp_tps": 777.1862956367498,
+   "server_tg_tps": 25.818569544173585
+  }
+ ]
+}

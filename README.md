@@ -3,12 +3,83 @@
 Single-user llama.cpp serving on one **AMD Radeon AI PRO R9700** (32 GB, ~640 GB/s), Fedora 44,
 Mesa 26.2 RADV, ROCm 7.1 (Fedora packages). Workload: chat + agent use with long contexts (up to 262K).
 
-- **Phase 1 (done):** Qwen3.8-35B-A3B Q4_K_M (hybrid Gated-DeltaNet + attention MoE, ~3B active), MTP speculative decoding.
-- **Phase 2 (next):** Qwen3.8-27B.
+- **Phase 1:** Qwen3.8-35B-A3B Q4_K_M (hybrid Gated-DeltaNet + attention MoE, ~3B active), MTP speculative decoding.
+  **+23–27% decode.**
+- **Phase 2:** Qwen3.8-27B (dense hybrid). Unsloth UD-Q4_K_XL + MTP (n=3) + draft head + RDNA4 mat-vec tuning:
+  **2.4–2.7× decode on code/JSON, 1.6–2.0× on prose/explanations, 1.9× at 100K context** vs stock llama.cpp without speculation.
 
-All changes are **lossless**: greedy output is byte-identical with and without each change.
+All code changes are **lossless**: greedy output is byte-identical with and without each change. The one quality
+choice (which quantization to run) is measured separately with KL divergence against Q8_0.
 
-## Results: Qwen3.8-35B-A3B Q4_K_M, MTP n_max=2
+## Results: Qwen3.8-27B (128K context, f16 KV)
+
+Median decode tok/s (greedy / sampled at the server defaults; `tools/bench.py`) and the depth sweep (`tools/depth.py`):
+
+| | code | prose | explain | json | decode at 1K / 30K / 57K / 103K |
+|---|---|---|---|---|---|
+| Stock llama.cpp Vulkan, UD-IQ4_XS, no speculation | 36 / 36 | 36 / 36 | 36 / 36 | 36 / 36 | 36 / 32 / 30 / 26 |
+| **UD-Q4_K_XL, MTP n=3, this repo** | **88 / 79** | **57 / 56** | **71 / 71** | **96 / 96** | **76 / 68 / 61 / 49** |
+| UD-IQ4_XS, MTP n=3, this repo (faster, lower quality) | 91 / 87 | 58 / 56 | 80 / 71 | 101 / 101 | 82 / 69 / 59 / 50 |
+
+Prefill is ~1,000 tok/s up to 30K and ~700 tok/s at 100K (cold 100K prompt ≈ 145 s); speculation costs 5–10% of it.
+
+### Why UD-Q4_K_XL (quality vs speed)
+
+`llama-perplexity --kl-divergence` against Q8_0 (6 × 4,096 tokens of long prose), plus MTP-3 step time:
+
+| Quant | GB | PPL / PPL(Q8_0) | mean KLD | 99% KLD | same top token | ms/step (MTP 3) |
+|---|---|---|---|---|---|---|
+| UD-IQ4_XS | 14.3 | 1.0113 | 0.0244 | 0.356 | 95.1% | 37.8 |
+| **UD-Q4_K_XL** | 17.6 | **1.0034** | **0.0082** | **0.117** | **97.4%** | **40.2** |
+| UD-Q5_K_M | 19.8 | 1.0013 | 0.0045 | 0.061 | 98.2% | 44.0 |
+| UD-Q6_K | 22.0 | 1.0012 | 0.0026 | 0.039 | 98.6% | — |
+
+UD-Q4_K_XL diverges 3× less than IQ4_XS for 6% more step time.
+
+### What the 27B changes are
+
+1. **Speculative decoding with the model's own MTP head** (`--spec-type draft-mtp --spec-draft-n-max 3`) plus the
+   98K draft head (`patches/0003` ports patch 0001 to the dense `qwen35` graph; same tokenizer).
+2. **RDNA4 mat-vec tuning for multi-token verify** (`patches/0004`). Verifying k drafted tokens runs every weight
+   matrix against k+1 columns. On stock llama.cpp this stays at the memory-bandwidth limit up to 4 columns, then
+   degrades: at 8 columns Q4_K/Q5_K/Q6_K ran at 368/425/294 GB/s (of ~640). RDNA3 already had a "4 rows per
+   workgroup above 4 columns" rule; RDNA4 did not, and q6_K never used the integer-dot (MMVQ) path outside Intel.
+   With both, 8 columns run at 570/590/595 GB/s (cache-busting 20480×17408 matrices, `tools/mmbench.sh`).
+3. The Phase 1 settings apply unchanged (`GGML_VK_ALLOW_GRAPHICS_QUEUE=1`, `GGML_VK_DISABLE_GRAPH_OPTIMIZE=1`, GDN fusion).
+
+### Drafting options measured (UD-Q4_K_XL, greedy code / prose / explain / json, ms per step)
+
+| Drafter | tok/s | ms/step |
+|---|---|---|
+| MTP n=2 | 75 / 57 / 65 / 79 | 37.4 |
+| **MTP n=3** | **88 / 57 / 71 / 96** | **40.2** |
+| MTP n=4 | 93 / 52 / 72 / 104 | 46.2 |
+| DFlash2 (z-lab Q8_0 GGUF) n=3 | 86 / 58 / 68 / 93 | 41.5 |
+| DFlash2 n=7 (z-lab's recommendation) | 104 / 47 / 71 / 139 | 53.5 |
+| MTP with `--spec-draft-p-min` 0.5–0.8 (n=3–6) | never better on average than plain MTP 3 | |
+
+DFlash2 guesses better (up to 7.4 tokens/step on JSON) but costs ~5–6 ms/step for its drafter, and its
+acceptance collapses deep in long contexts (0.45 → 0.25 by 30K), so MTP n=3 is the default. DFlash2 n=7 is
+the better choice for code/JSON-heavy short-context work.
+
+### Measured and rejected (27B)
+
+| Idea | Result |
+|---|---|
+| HIP/ROCm build (gfx1201) | decode −11% (no spec) / −26% (MTP 3); prefill ≈ |
+| int8 coopmat MMQ for Q4_K/Q5_K on RDNA4 (excluded upstream) | slower (63 → 50 TF): exclusion confirmed |
+| Q5_K_M / Q6_K | +10% / more step time for smaller quality gains |
+
+### Where the time goes (27B, MTP 3, UD-Q4_K_XL)
+
+- **Short context (40 ms/step):** weight GEMVs ~30 ms (~86% of bandwidth over 16.5 GB), MTP drafting ~5 ms
+  (each draft pass reads ~0.76 GB), small ops ~3–4 ms. Realistic floor ≈ 30 ms.
+- **100K context (~52 ms/step):** verify attention reads 6.5 GB of KV per step (64 KB/token) at ~86% of bandwidth.
+  Only a smaller KV cache would help (quantized KV is slower on this backend).
+- **Prefill:** weight GEMMs at 44–72 TFLOPS depending on the quant format (30–40% of matrix peak); the next big
+  lever, and a kernel project.
+
+## Results: Qwen3.8-35B-A3B Q4_K_M, MTP n_max=2 (Phase 1)
 
 Short prompts, median decode tok/s (greedy; `tools/bench.py`):
 
@@ -72,8 +143,13 @@ Base: llama.cpp `95887577a` (2026-09-26).
 git -C llama.cpp checkout 95887577a && git -C llama.cpp am ../patches/*.patch
 cmake -S llama.cpp -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_NATIVE=ON
 cmake --build build -j
+# 35B-A3B
 GGML_VK_ALLOW_GRAPHICS_QUEUE=1 GGML_VK_DISABLE_GRAPH_OPTIMIZE=1 build/bin/llama-server \
-  -m model-dv98k.gguf -ngl 99 -fa on --spec-type draft-mtp --spec-draft-n-max 2 ...
+  -m Qwen3.8-35B-A3B-Q4_K_M-dv98k.gguf -ngl 99 -fa on --spec-type draft-mtp --spec-draft-n-max 2 ...
+# 27B
+python tools/add_draft_head.py Qwen3.8-27B-UD-Q4_K_XL.gguf Qwen3.8-27B-UD-Q4_K_XL-dv98k.gguf data/draft_vocab_chat96k.npy
+GGML_VK_ALLOW_GRAPHICS_QUEUE=1 GGML_VK_DISABLE_GRAPH_OPTIMIZE=1 build/bin/llama-server \
+  -m Qwen3.8-27B-UD-Q4_K_XL-dv98k.gguf -ngl 99 -fa on -c 131072 --spec-type draft-mtp --spec-draft-n-max 3 ...
 ```
 
 ## Tools
@@ -83,7 +159,9 @@ GGML_VK_ALLOW_GRAPHICS_QUEUE=1 GGML_VK_DISABLE_GRAPH_OPTIMIZE=1 build/bin/llama-
 - `tools/depth.py`: cache-busting context-depth sweep (prefill + decode at 1K…179K).
 - `tools/multiturn.py`: checks prefix reuse across chat turns.
 - `tools/gen.py`: greedy outputs for losslessness checks.
-- `tools/serve.sh`, `runcfg.sh`, `quick.sh`, `pf.sh`: start/stop a test server by PID and run the suites.
+- `tools/serve.sh`, `runcfg.sh`, `quick.sh`, `pf.sh`, `run27.sh`, `q27quick.sh`: start/stop a test server by PID and run the suites.
+- `tools/summ.py`: summarize results; `tools/mmbench.sh`, `mmbench_up.sh`: cache-busting small-N mat-vec bandwidth
+  (needs patches 0004/0005 for the test shapes); `tools/ggufmix.py`: bytes per quant type in a GGUF.
 - `results/`: raw JSON from every run.
 
 The harness expects two long plain-text files next to it (not included): `longtext.txt` (~16K tokens) and

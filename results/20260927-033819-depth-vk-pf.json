@@ -1,0 +1,30 @@
+{
+ "label": "vk-pf",
+ "url": "http://127.0.0.1:8081",
+ "model": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+ "time": "2026-09-27 03:37:19",
+ "runs": [
+  {
+   "target_k": 8,
+   "prompt_tokens": 8967,
+   "ttft": 8.392950534820557,
+   "prefill_tps": 1068.396621998168,
+   "completion_tokens": 300,
+   "decode_tps": 30.91359312582137,
+   "accept": null,
+   "server_pp_tps": 1094.47396227281,
+   "server_tg_tps": 30.91313790785052
+  },
+  {
+   "target_k": 32,
+   "prompt_tokens": 30166,
+   "ttft": 30.599117517471313,
+   "prefill_tps": 985.8454245543514,
+   "completion_tokens": 300,
+   "decode_tps": 28.87479399230576,
+   "accept": null,
+   "server_pp_tps": 1005.1184874296216,
+   "server_tg_tps": 28.874777910466555
+  }
+ ]
+}

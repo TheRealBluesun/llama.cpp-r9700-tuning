@@ -1,0 +1,30 @@
+{
+ "label": "hip-pf",
+ "url": "http://127.0.0.1:8081",
+ "model": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+ "time": "2026-09-27 03:36:09",
+ "runs": [
+  {
+   "target_k": 8,
+   "prompt_tokens": 8967,
+   "ttft": 8.182902812957764,
+   "prefill_tps": 1095.821397976352,
+   "completion_tokens": 300,
+   "decode_tps": 27.782674481044122,
+   "accept": null,
+   "server_pp_tps": 1115.9771159352995,
+   "server_tg_tps": 27.782488205218744
+  },
+  {
+   "target_k": 32,
+   "prompt_tokens": 30165,
+   "ttft": 31.323124408721924,
+   "prefill_tps": 963.0265361267906,
+   "completion_tokens": 300,
+   "decode_tps": 26.104232390980215,
+   "accept": null,
+   "server_pp_tps": 975.1520020001526,
+   "server_tg_tps": 26.10404618827233
+  }
+ ]
+}

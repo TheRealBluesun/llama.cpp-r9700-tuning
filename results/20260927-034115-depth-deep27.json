@@ -1,0 +1,19 @@
+{
+ "label": "deep27",
+ "url": "http://127.0.0.1:8081",
+ "model": "q27-q4kxl-dv98k.gguf",
+ "time": "2026-09-27 03:38:43",
+ "runs": [
+  {
+   "target_k": 100,
+   "prompt_tokens": 100607,
+   "ttft": 143.85852074623108,
+   "prefill_tps": 699.3468268554803,
+   "completion_tokens": 300,
+   "decode_tps": 48.395489178848344,
+   "accept": 0.6290322580645161,
+   "server_pp_tps": 701.385750485437,
+   "server_tg_tps": 48.39527577942696
+  }
+ ]
+}

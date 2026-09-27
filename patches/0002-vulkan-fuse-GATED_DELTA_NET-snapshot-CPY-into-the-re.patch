@@ -1,7 +1,7 @@
-From 7d52fc1b6fab52afd251bddcd01143e85adfd418 Mon Sep 17 00:00:00 2001
+From 97ccedf6642a3bb9be30941c3e60561a4812389e Mon Sep 17 00:00:00 2001
 From: TheRealBluesun <c.r.novick@gmail.com>
-Date: Sun, 27 Sep 2026 00:13:11 -0400
-Subject: [PATCH 2/2] vulkan: fuse GATED_DELTA_NET + snapshot CPY into the
+Date: Sun, 27 Sep 2026 00:27:17 -0400
+Subject: [PATCH 2/5] vulkan: fuse GATED_DELTA_NET + snapshot CPY into the
  recurrent cache; add qwen35moe prefill FA perf shapes
 
 ---
