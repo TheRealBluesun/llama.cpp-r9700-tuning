@@ -1,7 +1,7 @@
 From 523c47e1fba130568ed55642a46408c130564e20 Mon Sep 17 00:00:00 2001
 From: TheRealBluesun <c.r.novick@gmail.com>
 Date: Sun, 27 Sep 2026 02:06:53 -0400
-Subject: [PATCH 3/5] MTP: reduced-vocab draft head for qwen35 (dense) too
+Subject: [PATCH 3/6] MTP: reduced-vocab draft head for qwen35 (dense) too
 
 ---
  src/models/qwen35.cpp | 22 +++++++++++++++++++++-

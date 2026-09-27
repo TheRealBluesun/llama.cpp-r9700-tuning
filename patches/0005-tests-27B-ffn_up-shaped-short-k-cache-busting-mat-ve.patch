@@ -1,7 +1,7 @@
 From c2fd36a998071405aaa22aae0d15388832ff0994 Mon Sep 17 00:00:00 2001
 From: TheRealBluesun <c.r.novick@gmail.com>
 Date: Sun, 27 Sep 2026 03:54:17 -0400
-Subject: [PATCH 5/5] tests: 27B ffn_up-shaped (short-k) cache-busting mat-vec
+Subject: [PATCH 5/6] tests: 27B ffn_up-shaped (short-k) cache-busting mat-vec
  perf cases
 
 ---

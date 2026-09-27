@@ -1,7 +1,7 @@
 From c630e9e24051d0a07448c9d8378be665b11c9efa Mon Sep 17 00:00:00 2001
 From: TheRealBluesun <c.r.novick@gmail.com>
 Date: Sun, 27 Sep 2026 00:27:17 -0400
-Subject: [PATCH 1/5] MTP: optional reduced-vocab draft head
+Subject: [PATCH 1/6] MTP: optional reduced-vocab draft head
  (blk.N.nextn.draft_head/draft_ids) for qwen35moe
 
 ---

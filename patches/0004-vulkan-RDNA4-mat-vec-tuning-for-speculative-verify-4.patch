@@ -1,7 +1,7 @@
 From 788519bdd53c188eb2cf8ecb9fce9823c1840dc0 Mon Sep 17 00:00:00 2001
 From: TheRealBluesun <c.r.novick@gmail.com>
 Date: Sun, 27 Sep 2026 02:06:53 -0400
-Subject: [PATCH 4/5] vulkan: RDNA4 mat-vec tuning for speculative verify (4
+Subject: [PATCH 4/6] vulkan: RDNA4 mat-vec tuning for speculative verify (4
  rows above 4 cols, MMVQ q6_K for n>1); GGML_VK_MMV_ROWS_N experiment knob;
  27B-shaped cache-busting matmul perf cases
 

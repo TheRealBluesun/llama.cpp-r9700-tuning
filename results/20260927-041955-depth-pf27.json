@@ -1,0 +1,19 @@
+{
+ "label": "pf27",
+ "url": "http://127.0.0.1:8081",
+ "model": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+ "time": "2026-09-27 04:19:35",
+ "runs": [
+  {
+   "target_k": 8,
+   "prompt_tokens": 8967,
+   "ttft": 8.490892887115479,
+   "prefill_tps": 1056.0726791886623,
+   "completion_tokens": 300,
+   "decode_tps": 28.41493217558002,
+   "accept": null,
+   "server_pp_tps": 1081.647824780531,
+   "server_tg_tps": 28.414557946929403
+  }
+ ]
+}

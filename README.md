@@ -8,8 +8,15 @@ Mesa 26.2 RADV, ROCm 7.1 (Fedora packages). Workload: chat + agent use with long
 - **Phase 2:** Qwen3.8-27B (dense hybrid). Unsloth UD-Q4_K_XL + MTP (n=3) + draft head + RDNA4 mat-vec tuning:
   **2.4–2.7× decode on code/JSON, 1.6–2.0× on prose/explanations, 1.9× at 100K context** vs stock llama.cpp without speculation.
 
-All code changes are **lossless**: greedy output is byte-identical with and without each change. The one quality
-choice (which quantization to run) is measured separately with KL divergence against Q8_0.
+**No approximations beyond floating-point rounding.** Measured on greedy output (4 prompts, ~2K tokens each):
+
+| Change | Greedy output vs without it |
+|---|---|
+| Reduced-vocab draft head (0001/0003), GDN fusion (0002), `GGML_VK_ALLOW_GRAPHICS_QUEUE` | byte-identical |
+| `GGML_VK_DISABLE_GRAPH_OPTIMIZE` (op order/fusion), RDNA4 mat-vec tuning (0004: reduction order; q6_K verify via the standard q8_1-activation MMVQ path) | rounding-level: can flip a near-tie late in a long greedy generation |
+| For reference: stock llama.cpp, speculative vs non-speculative decode; or llama.cpp 09-22 vs 09-26 | same kind of rounding-level divergence (2 of 4 prompts) |
+
+The one real quality choice (which quantization to run) is measured separately with KL divergence against Q8_0.
 
 ## Results: Qwen3.8-27B (128K context, f16 KV)
 
