@@ -1,0 +1,74 @@
+{
+ "label": "his-vulkan-baseline",
+ "url": "http://127.0.0.1:8081",
+ "model": "Qwen3.8-35B-A3B-Q4_K_M.gguf",
+ "time": "2026-09-26 22:29:49",
+ "runs": [
+  {
+   "target_k": 1,
+   "prompt_tokens": 1118,
+   "ttft": 0.4484124183654785,
+   "prefill_tps": 2493.2404951567914,
+   "completion_tokens": 300,
+   "decode_tps": 167.39424090841865,
+   "accept": 0.692,
+   "server_pp_tps": 2948.0401334265034,
+   "server_tg_tps": 167.37469708818406
+  },
+  {
+   "target_k": 8,
+   "prompt_tokens": 7856,
+   "ttft": 2.1027965545654297,
+   "prefill_tps": 3735.9772075637366,
+   "completion_tokens": 300,
+   "decode_tps": 154.7148286900059,
+   "accept": 0.6119402985074627,
+   "server_pp_tps": 3882.2189332298867,
+   "server_tg_tps": 154.70473127425993
+  },
+  {
+   "target_k": 32,
+   "prompt_tokens": 30225,
+   "ttft": 9.139935731887817,
+   "prefill_tps": 3306.916031646663,
+   "completion_tokens": 300,
+   "decode_tps": 145.07914253977162,
+   "accept": 0.6311787072243346,
+   "server_pp_tps": 3376.2288467673543,
+   "server_tg_tps": 145.07921859071308
+  },
+  {
+   "target_k": 64,
+   "prompt_tokens": 57464,
+   "ttft": 20.689292669296265,
+   "prefill_tps": 2777.475330767536,
+   "completion_tokens": 300,
+   "decode_tps": 138.1291767079774,
+   "accept": 0.6575875486381323,
+   "server_pp_tps": 2842.628384513077,
+   "server_tg_tps": 138.11918623316643
+  },
+  {
+   "target_k": 128,
+   "prompt_tokens": 115227,
+   "ttft": 55.14238786697388,
+   "prefill_tps": 2089.6265913977995,
+   "completion_tokens": 300,
+   "decode_tps": 122.30388040033775,
+   "accept": 0.6798418972332015,
+   "server_pp_tps": 2123.711370987313,
+   "server_tg_tps": 122.30269384976975
+  },
+  {
+   "target_k": 200,
+   "prompt_tokens": 178899,
+   "ttft": 109.90374398231506,
+   "prefill_tps": 1627.7789410776322,
+   "completion_tokens": 300,
+   "decode_tps": 107.34603547966019,
+   "accept": 0.6947791164658634,
+   "server_pp_tps": 1653.463653246049,
+   "server_tg_tps": 107.33943241492901
+  }
+ ]
+}

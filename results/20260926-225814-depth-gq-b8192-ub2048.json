@@ -1,0 +1,41 @@
+{
+ "label": "gq-b8192-ub2048",
+ "url": "http://127.0.0.1:8081",
+ "model": "Qwen3.8-35B-A3B-Q4_K_M.gguf",
+ "time": "2026-09-26 22:55:58",
+ "runs": [
+  {
+   "target_k": 8,
+   "prompt_tokens": 8967,
+   "ttft": 2.677233934402466,
+   "prefill_tps": 3349.3524360251145,
+   "completion_tokens": 300,
+   "decode_tps": 187.61690869223017,
+   "accept": 0.692,
+   "server_pp_tps": 3471.4976761832495,
+   "server_tg_tps": 187.60160446429074
+  },
+  {
+   "target_k": 64,
+   "prompt_tokens": 57320,
+   "ttft": 19.657737970352173,
+   "prefill_tps": 2915.900094224987,
+   "completion_tokens": 300,
+   "decode_tps": 151.4195934130563,
+   "accept": 0.6525096525096525,
+   "server_pp_tps": 2952.6476600705146,
+   "server_tg_tps": 151.42652395096619
+  },
+  {
+   "target_k": 200,
+   "prompt_tokens": 178480,
+   "ttft": 106.86717581748962,
+   "prefill_tps": 1670.110570759468,
+   "completion_tokens": 300,
+   "decode_tps": 115.9967612210796,
+   "accept": 0.6947791164658634,
+   "server_pp_tps": 1686.0984601768162,
+   "server_tg_tps": 115.98947948266364
+  }
+ ]
+}

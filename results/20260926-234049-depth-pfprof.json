@@ -1,0 +1,19 @@
+{
+ "label": "pfprof",
+ "url": "http://127.0.0.1:8081",
+ "model": "q35a3b-dv98k.gguf",
+ "time": "2026-09-26 23:39:50",
+ "runs": [
+  {
+   "target_k": 115,
+   "prompt_tokens": 115853,
+   "ttft": 55.18403339385986,
+   "prefill_tps": 2099.3934816821593,
+   "completion_tokens": 300,
+   "decode_tps": 93.52897346980448,
+   "accept": 0.6705882352941176,
+   "server_pp_tps": 2106.8788604577426,
+   "server_tg_tps": 93.53161618878995
+  }
+ ]
+}

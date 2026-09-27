@@ -1,0 +1,19 @@
+{
+ "label": "deepdec",
+ "url": "http://127.0.0.1:8081",
+ "model": "q35a3b-dv98k.gguf",
+ "time": "2026-09-26 23:46:55",
+ "runs": [
+  {
+   "target_k": 115,
+   "prompt_tokens": 115852,
+   "ttft": 55.41857028007507,
+   "prefill_tps": 2090.490595742649,
+   "completion_tokens": 300,
+   "decode_tps": 104.60191129792685,
+   "accept": 0.708502024291498,
+   "server_pp_tps": 2098.0467603357897,
+   "server_tg_tps": 104.60562106526307
+  }
+ ]
+}
